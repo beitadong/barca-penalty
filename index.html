@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>⚽ 巴萨点球大战</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-family: 'Segoe UI', 'PingFang SC', system-ui, sans-serif;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.game-wrapper {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  max-width: 800px;
+  max-height: 700px;
+  overflow: hidden;
+}
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+/* Top bar overlay */
+.top-bar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, transparent 100%);
+  pointer-events: none;
+  z-index: 5;
+}
+.team-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #FFCD00;
+  font-size: clamp(14px, 2.5vw, 20px);
+  font-weight: 700;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+.team-name .badge {
+  display: inline-flex;
+  width: 28px; height: 28px;
+  background: conic-gradient(#004D98 0deg 120deg, #A50044 120deg 240deg, #FFCD00 240deg 360deg);
+  border-radius: 50%;
+  border: 2px solid #FFCD00;
+  box-shadow: 0 0 8px rgba(255,205,0,0.3);
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 900;
+  color: #fff;
+}
+.score-display {
+  color: #fff;
+  font-size: clamp(13px, 2.2vw, 18px);
+  font-weight: 600;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+.score-display span { color: #FFCD00; }
+.round-info {
+  color: rgba(255,255,255,0.7);
+  font-size: clamp(11px, 1.8vw, 14px);
+  text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+/* Bottom hint */
+.hint-bar {
+  position: absolute;
+  bottom: 12px; left: 0; right: 0;
+  text-align: center;
+  color: rgba(255,255,255,0.5);
+  font-size: clamp(11px, 1.8vw, 14px);
+  pointer-events: none;
+  z-index: 5;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.6);
+}
+/* Result overlay */
+.result-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 10;
+  pointer-events: none;
+}
+.result-overlay.show { display: flex; }
+.result-text {
+  font-size: clamp(48px, 10vw, 80px);
+  font-weight: 900;
+  text-shadow: 0 4px 20px rgba(0,0,0,0.7);
+  animation: resultPop 0.5s ease-out;
+}
+.result-text.goal {
+  color: #FFCD00;
+  text-shadow: 0 0 40px rgba(255,205,0,0.5), 0 4px 20px rgba(0,0,0,0.7);
+}
+.result-text.saved { color: #ff6b6b; }
+.result-text.miss { color: #ffa94d; }
+.result-sub {
+  color: rgba(255,255,255,0.9);
+  font-size: clamp(16px, 3vw, 24px);
+  margin-top: 8px;
+  text-shadow: 0 2px 10px rgba(0,0,0,0.7);
+}
+@keyframes resultPop {
+  0% { transform: scale(0.3); opacity: 0; }
+  60% { transform: scale(1.15); }
+  100% { transform: scale(1); opacity: 1; }
+}
+#particleCanvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 8;
+}
+</style>
+</head>
+<body>
+
+<div class="game-wrapper">
+  <canvas id="gameCanvas"></canvas>
+  <canvas id="particleCanvas"></canvas>
+
+  <div class="top-bar">
+    <div class="team-name">
+      <span class="badge">⚽</span>
+      <span>FC Barcelona</span>
+    </div>
+    <div class="score-display">
+      进球 <span id="scoreNum">0</span> / <span id="totalNum">5</span>
+    </div>
+    <div class="round-info" id="roundInfo">第 1 / 5 轮</div>
+  </div>
+
+  <div class="hint-bar" id="hintText">👆 点击球门位置瞄准</div>
+
+  <div class="result-overlay" id="resultOverlay">
+    <div class="result-text" id="resultText">⚽ GOAL!</div>
+    <div class="result-sub" id="resultSub">⚡ 点击继续</div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// 🏟️  FC BARCELONA PENALTY KICK CHALLENGE
+// ============================================================
+
+(function(){
+'use strict';
+
+// --- Polyfill roundRect if not supported ---
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    if (r > w/2) r = w/2;
+    if (r > h/2) r = h/2;
+    this.moveTo(x + r, y);
+    this.arcTo(x + w, y, x + w, y + h, r);
+    this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r);
+    this.arcTo(x, y, x + w, y, r);
+    return this;
+  };
+}
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const pCanvas = document.getElementById('particleCanvas');
+const pCtx = pCanvas.getContext('2d');
+
+const scoreSpan = document.getElementById('scoreNum');
+const totalSpan = document.getElementById('totalNum');
+const roundInfo = document.getElementById('roundInfo');
+const hintText = document.getElementById('hintText');
+const resultOverlay = document.getElementById('resultOverlay');
+const resultText = document.getElementById('resultText');
+const resultSub = document.getElementById('resultSub');
+
+// --- Resize ---
+let W, H, scale;
+function resize() {
+  const wrap = canvas.parentElement;
+  W = wrap.clientWidth;
+  H = wrap.clientHeight;
+  canvas.width = W;
+  canvas.height = H;
+  pCanvas.width = W;
+  pCanvas.height = H;
+  scale = Math.min(W / 800, H / 700);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- Barca Colors ---
+const COLORS = {
+  blue: '#004D98',
+  claret: '#A50044',
+  gold: '#FFCD00',
+};
+
+// --- Game State ---
+const State = { START: 0, AIM: 1, POWER: 2, SHOOT: 3, RESULT: 4, GAMEOVER: 5 };
+let state = State.START;
+let score = 0;
+let round = 0;
+const MAX_ROUNDS = 5;
+let shots = [];
+
+// --- Geometry ---
+let goalRect = { x: 0, y: 0, w: 0, h: 0 };
+let ballPos = { x: 0, y: 0 };
+let kickerPos = { x: 0, y: 0 };
+
+function calcGeometry() {
+  const s = scale;
+  const gw = 360 * s;
+  const gh = 240 * s;
+  const gx = (W - gw) / 2;
+  const gy = H * 0.15;
+  goalRect = { x: gx, y: gy, w: gw, h: gh };
+  ballPos = { x: W / 2, y: gy + gh + 70 * s };
+  kickerPos = { x: W / 2, y: gy + gh + 40 * s };
+}
+calcGeometry();
+
+// --- Aiming ---
+let aimX = 0, aimY = 0;
+let aimLocked = false;
+let powerValue = 0;
+let powerDir = 1;
+let powerAnimating = false;
+
+// --- Ball animation ---
+let ballAnim = { t: 0, startX: 0, startY: 0, endX: 0, endY: 0, duration: 0 };
+let isShooting = false;
+
+// --- Keeper ---
+let keeperAnim = { t: 0, fromX: 0, toX: 0 };
+
+// --- Particles ---
+let particles = [];
+
+// --- Mouse / Touch ---
+let mouseX = W/2, mouseY = H/2;
+let pointerInside = false;
+
+// -----------------------------------------------------------
+//  DRAWING HELPERS
+// -----------------------------------------------------------
+
+function fillRoundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.fill();
+}
+
+function strokeRoundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.stroke();
+}
+
+// -----------------------------------------------------------
+//  DRAWING FUNCTIONS
+// -----------------------------------------------------------
+
+function drawPitch() {
+  // Grass gradient - use safe approach
+  const grad = ctx.createLinearGradient(0, H*0.45, 0, H);
+  grad.addColorStop(0, '#1e6b38');
+  grad.addColorStop(0.5, '#2d8a4e');
+  grad.addColorStop(1, '#235f30');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, H*0.45, W, H*0.55);
+
+  // Pitch stripes
+  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  for (let i = 0; i < 6; i++) {
+    ctx.fillRect((W/6)*i, H*0.45, W/12, H*0.55);
+  }
+
+  // Penalty area
+  const s = scale;
+  const paW = 200 * s, paH = 160 * s;
+  const paX = (W - paW) / 2, paY = goalRect.y + goalRect.h - 15 * s;
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 2 * s;
+  ctx.strokeRect(paX, paY, paW, paH);
+
+  // Penalty spot
+  ctx.beginPath();
+  ctx.arc(W/2, ballPos.y, 4*s, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fill();
+}
+
+function drawGoal() {
+  const g = goalRect, s = scale;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(g.x+8, g.y+8, g.w, g.h);
+
+  // Net background
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(g.x, g.y, g.w, g.h);
+
+  // Net lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
+  const ns = 12 * s;
+  for (let i = 0; i <= g.w; i += ns) {
+    ctx.beginPath();
+    ctx.moveTo(g.x+i, g.y);
+    ctx.lineTo(g.x+i, g.y+g.h);
+    ctx.stroke();
+  }
+  for (let i = 0; i <= g.h; i += ns) {
+    ctx.beginPath();
+    ctx.moveTo(g.x, g.y+i);
+    ctx.lineTo(g.x+g.w, g.y+i);
+    ctx.stroke();
+  }
+
+  // Frame
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 6*s;
+  ctx.strokeRect(g.x, g.y, g.w, g.h);
+
+  // Post highlight
+  const pg = ctx.createLinearGradient(g.x, 0, g.x+20*s, 0);
+  pg.addColorStop(0, 'rgba(255,255,255,0.3)');
+  pg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = pg;
+  ctx.fillRect(g.x, g.y, 20*s, g.h);
+}
+
+function drawKeeper(t) {
+  const g = goalRect, s = scale;
+  const kx = g.x + g.w/2 + (keeperAnim.fromX + (keeperAnim.toX-keeperAnim.fromX)*t);
+  const ky = g.y + g.h * 0.4;
+  const shirtColor = '#00b894';
+
+  ctx.shadowColor = 'rgba(0,0,0,0.3)';
+  ctx.shadowBlur = 10*s;
+
+  // Arms
+  const armSpread = 20*s*(1+Math.abs(keeperAnim.toX)*0.5);
+  ctx.save();
+  ctx.translate(kx, ky);
+  ctx.fillStyle = shirtColor;
+  ctx.beginPath();
+  ctx.ellipse(-18*s - armSpread/2, -5*s, 16*s, 8*s, -0.3, 0, Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(18*s + armSpread/2, -5*s, 16*s, 8*s, 0.3, 0, Math.PI*2);
+  ctx.fill();
+
+  // Gloves
+  ctx.fillStyle = '#ffd700';
+  ctx.beginPath();
+  ctx.arc(-18*s - armSpread/2 - 6*s, -6*s, 8*s, 0, Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(18*s + armSpread/2 + 6*s, -6*s, 8*s, 0, Math.PI*2);
+  ctx.fill();
+
+  // Torso
+  ctx.fillStyle = shirtColor;
+  ctx.beginPath();
+  ctx.ellipse(0, 5*s, 18*s, 20*s, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Stripe
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 2*s;
+  ctx.beginPath();
+  ctx.moveTo(0, -20*s);
+  ctx.lineTo(0, 25*s);
+  ctx.stroke();
+
+  // Number
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = (12*s)+'px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('1', 0, 10*s);
+
+  // Head
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#f5d6b8';
+  ctx.beginPath();
+  ctx.arc(0, -22*s, 14*s, 0, Math.PI*2);
+  ctx.fill();
+
+  // Cap
+  ctx.fillStyle = '#1a1a2e';
+  ctx.beginPath();
+  ctx.arc(0, -24*s, 14*s, Math.PI, 0);
+  ctx.fill();
+
+  // Eyes
+  ctx.fillStyle = '#333';
+  const ed = keeperAnim.toX > 0.1 ? 3*s : (keeperAnim.toX < -0.1 ? -3*s : 0);
+  ctx.beginPath();
+  ctx.arc(-4*s+ed, -23*s, 1.5*s, 0, Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(4*s+ed, -23*s, 1.5*s, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+  ctx.shadowBlur = 0;
+}
+
+function drawBall(x, y, r) {
+  const s = scale;
+  const radius = r || (12*s);
+  ctx.shadowColor = 'rgba(0,0,0,0.4)';
+  ctx.shadowBlur = 8*s;
+
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI*2);
+  ctx.fill();
+
+  // Pentagon pattern
+  ctx.fillStyle = '#333';
+  const pr = radius*0.38;
+  for (let i = 0; i < 5; i++) {
+    const a = (i/5)*Math.PI*2 - Math.PI/2;
+    const px = x + Math.cos(a)*radius*0.6;
+    const py = y + Math.sin(a)*radius*0.6;
+    ctx.beginPath();
+    for (let j = 0; j < 5; j++) {
+      const pa = (j/5)*Math.PI*2 - Math.PI/2;
+      const ppx = px + Math.cos(pa)*pr;
+      const ppy = py + Math.sin(pa)*pr;
+      j===0 ? ctx.moveTo(ppx, ppy) : ctx.lineTo(ppx, ppy);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.beginPath();
+  ctx.arc(x-radius*0.25, y-radius*0.3, radius*0.35, 0, Math.PI*2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function drawAimCrosshair(x, y) {
+  const g = goalRect, s = scale;
+  if (x<g.x||x>g.x+g.w||y<g.y||y>g.y+g.h) return;
+
+  ctx.save();
+  ctx.shadowBlur = 0;
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 2*s;
+  ctx.setLineDash([4*s,4*s]);
+  ctx.beginPath();
+  ctx.arc(x, y, 18*s, 0, Math.PI*2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = 2*s;
+  const cl = 10*s;
+  ctx.beginPath();
+  ctx.moveTo(x-cl, y); ctx.lineTo(x+cl, y);
+  ctx.moveTo(x, y-cl); ctx.lineTo(x, y+cl);
+  ctx.stroke();
+
+  ctx.fillStyle = '#FFCD00';
+  ctx.beginPath();
+  ctx.arc(x, y, 3*s, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawPowerBar() {
+  const s = scale;
+  const bx = W - 50*s, by = H*0.25, bw = 20*s;
+  const bh = Math.min(300*s, H*0.45);
+
+  // Background
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  fillRoundRect(bx-4*s, by-4*s, bw+8*s, bh+8*s, 6*s);
+
+  // Empty bar
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  fillRoundRect(bx, by, bw, bh, 4*s);
+
+  // Filled bar
+  const fillH = bh * powerValue;
+  const powerGrad = ctx.createLinearGradient(0, by+bh, 0, by);
+  powerGrad.addColorStop(0,'#55efc4');
+  powerGrad.addColorStop(0.4,'#fdcb6e');
+  powerGrad.addColorStop(0.7,'#e17055');
+  powerGrad.addColorStop(1,'#d63031');
+  ctx.fillStyle = powerGrad;
+  fillRoundRect(bx, by+bh-fillH, bw, fillH, 4*s);
+
+  // Label
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = (11*s)+'px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('力量', bx+bw/2, by+bh+24*s);
+
+  // Percentage
+  if (powerAnimating||state===State.POWER) {
+    ctx.fillStyle = '#FFCD00';
+    ctx.font = 'bold '+(14*s)+'px sans-serif';
+    ctx.fillText(Math.round(powerValue*100)+'%', bx+bw/2, by-14*s);
+  }
+}
+
+function drawKicker() {
+  const s = scale;
+  const kx = kickerPos.x, ky = kickerPos.y;
+
+  ctx.shadowColor = 'rgba(0,0,0,0.3)';
+  ctx.shadowBlur = 8*s;
+
+  // Body
+  ctx.fillStyle = '#004D98';
+  ctx.beginPath();
+  ctx.ellipse(kx, ky-8*s, 16*s, 22*s, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Stripes
+  ctx.fillStyle = '#A50044';
+  ctx.fillRect(kx-14*s, ky-26*s, 6*s, 35*s);
+  ctx.fillRect(kx-4*s, ky-28*s, 8*s, 38*s);
+  ctx.fillRect(kx+8*s, ky-24*s, 6*s, 32*s);
+
+  // Head
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#f5d6b8';
+  ctx.beginPath();
+  ctx.arc(kx, ky-34*s, 14*s, 0, Math.PI*2);
+  ctx.fill();
+
+  // Hair
+  ctx.fillStyle = '#2d1a0e';
+  ctx.beginPath();
+  ctx.arc(kx, ky-38*s, 14*s, Math.PI*1.2, Math.PI*-0.2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(kx, ky-44*s, 12*s, 6*s, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Legs
+  ctx.strokeStyle = '#1a1a2e';
+  ctx.lineWidth = 5*s;
+  ctx.lineCap='round';
+  ctx.beginPath();
+  ctx.moveTo(kx-5*s, ky+14*s);
+  ctx.lineTo(kx-8*s, ky+34*s);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(kx+5*s, ky+13*s);
+  ctx.lineTo(kx+15*s, ky+30*s);
+  ctx.stroke();
+
+  // Boots
+  ctx.fillStyle = '#111';
+  ctx.beginPath();
+  ctx.ellipse(kx-8*s, ky+35*s, 6*s, 3*s, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(kx+17*s, ky+31*s, 6*s, 3*s, 0.3, 0, Math.PI*2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+const ZONES = [
+  {label:'左上',x:.2,y:.2},{label:'中上',x:.5,y:.18},{label:'右上',x:.8,y:.2},
+  {label:'左中',x:.2,y:.5},{label:'正中',x:.5,y:.5},{label:'右中',x:.8,y:.5},
+  {label:'左下',x:.2,y:.8},{label:'中下',x:.5,y:.82},{label:'右下',x:.8,y:.8},
+];
+
+function getZone(x,y) {
+  const g=goalRect;
+  const rx=(x-g.x)/g.w, ry=(y-g.y)/g.h;
+  return (ry<.33?0:ry<.67?1:2)*3+(rx<.33?0:rx<.67?1:2);
+}
+function getZoneCenter(idx) {
+  const g=goalRect, z=ZONES[idx];
+  return {x:g.x+z.x*g.w, y:g.y+z.y*g.h};
+}
+function getZoneHorizontal(idx) { return idx%3; }
+
+// -----------------------------------------------------------
+//  GAME LOGIC
+// -----------------------------------------------------------
+
+function startGame() {
+  score=0; round=0; shots=[];
+  updateScore();
+  nextRound();
+}
+
+function nextRound() {
+  if (round>=MAX_ROUNDS) { state=State.GAMEOVER; showGameOver(); return; }
+  round++;
+  state=State.AIM; aimLocked=false;
+  powerValue=0; powerDir=1; powerAnimating=false;
+  isShooting=false;
+  keeperAnim={t:0,fromX:0,toX:0};
+  particles=[];
+  ballPos={x:W/2, y:goalRect.y+goalRect.h+70*scale};
+  kickerPos={x:W/2, y:goalRect.y+goalRect.h+40*scale};
+  hintText.textContent='👆 移动鼠标瞄准，点击锁定目标位置';
+  resultOverlay.classList.remove('show');
+  updateScore();
+}
+
+function lockAim(x,y) {
+  const g=goalRect;
+  aimX=Math.max(g.x+10,Math.min(g.x+g.w-10,x));
+  aimY=Math.max(g.y+10,Math.min(g.y+g.h-10,y));
+  aimLocked=true; state=State.POWER;
+  powerValue=0.1; powerDir=1; powerAnimating=true;
+  hintText.textContent='💪⏱ 点击蓄力！力量条越高射得越猛';
+}
+
+function lockPower() {
+  powerAnimating=false; state=State.SHOOT; isShooting=true;
+  hintText.textContent='⚡ 球飞出去了！';
+  ballAnim={t:0,startX:ballPos.x,startY:ballPos.y,endX:aimX,endY:aimY,duration:0.5-powerValue*0.25};
+  const shotZone=getZone(aimX,aimY);
+  const shotH=getZoneHorizontal(shotZone);
+  const rand=Math.random();
+  let keeperGo;
+  if (rand<0.4) {
+    keeperGo=shotH-1+(Math.random()-0.5)*0.3;
+  } else if (rand<0.7) {
+    keeperGo=(Math.random()-0.5)*2;
+  } else {
+    keeperGo=0;
+  }
+  keeperGo=Math.max(-1,Math.min(1,keeperGo));
+  keeperAnim={t:0,fromX:0,toX:keeperGo};
+}
+
+function resolveShot() {
+  const shotZone=getZone(aimX,aimY);
+  const shotH=getZoneHorizontal(shotZone);
+  const keeperH=Math.round(keeperAnim.toX);
+  const sameDir=shotH===keeperH+1;
+  const powerBonus=powerValue>0.7?0.15:(powerValue<0.25?-0.15:0);
+  let isGoal, resultType;
+  if (sameDir) {
+    isGoal=Math.random()<0.2+powerBonus;
+    resultType=isGoal?'goal':'saved';
+  } else {
+    isGoal=Math.random()<0.88+powerBonus*0.5;
+    resultType=isGoal?'goal':'miss';
+  }
+  if (powerValue<0.15&&!sameDir) {
+    isGoal=Math.random()<0.5;
+    resultType=isGoal?'goal':'miss';
+  }
+  if (isGoal) {
+    score++;
+    shots.push({zone:shotZone,power:powerValue,result:'goal'});
+    spawnParticles('goal');
+    showResult('⚽ GOAL!','🔥 好球！','goal');
+  } else if (resultType==='saved') {
+    shots.push({zone:shotZone,power:powerValue,result:'saved'});
+    spawnParticles('saved');
+    showResult('🧤 扑出！','门将神勇发挥！','saved');
+  } else {
+    shots.push({zone:shotZone,power:powerValue,result:'miss'});
+    spawnParticles('miss');
+    showResult('😫 射偏！','差一点点...','miss');
+  }
+  updateScore();
+  state=State.RESULT;
+  hintText.textContent='👆 点击继续';
+}
+
+function showGameOver() {
+  const pct=Math.round(score/MAX_ROUNDS*100);
+  let msg, sub;
+  if (score===MAX_ROUNDS) { msg='🏆 百发百中！'; sub='完美帽子戏法×5！梅西附体！'; }
+  else if (score>=4) { msg='🌟 太棒了！'; sub=score+'/'+MAX_ROUNDS+'的命中率，巴萨需要你！'; }
+  else if (score>=3) { msg='👏 不错！'; sub=score+'/'+MAX_ROUNDS+'，继续加油！'; }
+  else if (score>=1) { msg='💪 还可以'; sub=score+'/'+MAX_ROUNDS+'，多练练点球吧~'; }
+  else { msg='😅 鸭蛋...'; sub='再试一次！'; }
+  resultText.className='result-text'; resultText.textContent=msg;
+  resultSub.textContent=sub+' 👆 点击重新开始';
+  resultOverlay.classList.add('show'); hintText.textContent='';
+}
+
+function showResult(msg,sub,type) {
+  resultText.className='result-text '+type;
+  resultText.textContent=msg; resultSub.textContent=sub+' 👆 点击继续';
+  resultOverlay.classList.add('show');
+}
+
+function updateScore() {
+  scoreSpan.textContent=score; totalSpan.textContent=MAX_ROUNDS;
+  roundInfo.textContent='第 '+round+' / '+MAX_ROUNDS+' 轮';
+}
+
+// -----------------------------------------------------------
+//  PARTICLES
+// -----------------------------------------------------------
+
+function spawnParticles(type) {
+  const count=type==='goal'?60:20;
+  const colors=type==='goal'?[COLORS.gold,COLORS.blue,COLORS.claret,'#ffeb3b','#fff']:['#666','#888','#555'];
+  for(let i=0;i<count;i++){
+    particles.push({
+      x:W/2+(Math.random()-0.5)*100,
+      y:H*0.3+Math.random()*100,
+      vx:(Math.random()-0.5)*8,
+      vy:-Math.random()*6-2,
+      r:3+Math.random()*5,
+      color:colors[Math.floor(Math.random()*colors.length)],
+      life:1,decay:0.008+Math.random()*0.015,gravity:0.08+Math.random()*0.04
+    });
+  }
+  if(type==='goal'){
+    for(let i=0;i<50;i++){
+      particles.push({
+        x:Math.random()*W,y:Math.random()*H*0.5,
+        vx:(Math.random()-0.5)*3,vy:1+Math.random()*3,
+        r:2+Math.random()*3,
+        color:[COLORS.gold,COLORS.blue,COLORS.claret,'#fff'][Math.floor(Math.random()*4)],
+        life:1,decay:0.005+Math.random()*0.01,gravity:0.01,confetti:true
+      });
+    }
+  }
+}
+
+function updateParticles(){
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    p.x+=p.vx;p.y+=p.vy;p.vy+=p.gravity;p.life-=p.decay;
+    if(p.confetti) p.vx+=(Math.random()-0.5)*0.3;
+    if(p.life<=0) particles.splice(i,1);
+  }
+}
+
+function drawParticles(){
+  pCtx.clearRect(0,0,W,H);
+  for(const p of particles){
+    pCtx.globalAlpha=Math.max(0,p.life);
+    pCtx.fillStyle=p.color;
+    pCtx.beginPath();
+    pCtx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    pCtx.fill();
+  }
+  pCtx.globalAlpha=1;
+}
+
+// -----------------------------------------------------------
+//  ANIMATION LOOP
+// -----------------------------------------------------------
+
+let lastTime=0;
+
+function update(dt){
+  switch(state){
+    case State.POWER:
+      if(powerAnimating){
+        powerValue+=powerDir*dt*0.8;
+        if(powerValue>=1){powerValue=1;powerDir=-1;}
+        if(powerValue<=0.05){powerValue=0.05;powerDir=1;}
+      }
+      break;
+    case State.SHOOT:
+      if(isShooting){
+        ballAnim.t+=dt/ballAnim.duration;
+        if(ballAnim.t>=1){ballAnim.t=1;isShooting=false;resolveShot();}
+        keeperAnim.t=Math.min(1,ballAnim.t*1.5);
+      }
+      break;
+    case State.RESULT:
+      keeperAnim.t=Math.min(1,keeperAnim.t+dt*2);
+      break;
+  }
+  updateParticles();
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+
+  // Sky background
+  const bg=ctx.createRadialGradient(W/2,H*0.3,0,W/2,H*0.3,W*0.7);
+  bg.addColorStop(0,'#1a1a3e');bg.addColorStop(0.5,'#0a0a2a');bg.addColorStop(1,'#050515');
+  ctx.fillStyle=bg;
+  ctx.fillRect(0,0,W,H);
+
+  // Small lights
+  ctx.fillStyle='rgba(255,255,255,0.05)';
+  for(let i=0;i<30;i++){
+    const sx=(i*137+50)%W,sy=(i*73+20)%(H*0.3);
+    ctx.beginPath();ctx.arc(sx,sy,1.5,0,Math.PI*2);ctx.fill();
+  }
+
+  // Floodlights
+  const lg=ctx.createRadialGradient(W/4,0,0,W/4,0,120*scale);
+  lg.addColorStop(0,'rgba(255,255,240,0.06)');lg.addColorStop(1,'transparent');
+  ctx.fillStyle=lg;ctx.fillRect(0,0,W/2,H*0.4);
+  const lg2=ctx.createRadialGradient(W*0.75,0,0,W*0.75,0,120*scale);
+  lg2.addColorStop(0,'rgba(255,255,240,0.06)');lg2.addColorStop(1,'transparent');
+  ctx.fillStyle=lg2;ctx.fillRect(W/2,0,W/2,H*0.4);
+
+  drawPitch();
+  drawGoal();
+  drawKeeper(keeperAnim.t);
+
+  // Ball
+  let bx=ballPos.x,by=ballPos.y;
+  if(state===State.SHOOT&&isShooting){
+    const t=ballAnim.t;
+    const ease=t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+    bx=ballAnim.startX+(ballAnim.endX-ballAnim.startX)*ease;
+    by=ballAnim.startY+(ballAnim.endY-ballAnim.startY)*ease;
+    drawBall(bx,by,12*scale*(1-ease*0.2));
+  } else if(state===State.RESULT){
+    drawBall(ballAnim.endX||aimX,ballAnim.endY||aimY,12*scale);
+  } else {
+    drawBall(bx,by);
+  }
+
+  if(state===State.AIM||state===State.POWER) drawKicker();
+
+  if(state===State.AIM&&pointerInside) drawAimCrosshair(mouseX,mouseY);
+  if(state===State.POWER||state===State.AIM) drawPowerBar();
+
+  // Grid lines
+  if(state===State.AIM){
+    const g=goalRect,zW=g.w/3,zH=g.h/3;
+    ctx.strokeStyle='rgba(255,255,255,0.08)';ctx.lineWidth=1;
+    for(let r=0;r<3;r++)for(let c=0;c<3;c++){
+      ctx.strokeRect(g.x+c*zW,g.y+r*zH,zW,zH);
+    }
+  }
+
+  // Start screen overlay
+  if(state===State.START){
+    ctx.fillStyle='rgba(0,0,0,0.6)';
+    ctx.fillRect(0,0,W,H);
+    ctx.textAlign='center';ctx.textBaseline='middle';
+
+    const titleSz=Math.min(W*0.08,48);
+    ctx.font='900 '+titleSz+'px sans-serif';
+    ctx.fillStyle=COLORS.gold;
+    ctx.shadowColor='rgba(255,205,0,0.3)';ctx.shadowBlur=20;
+    ctx.fillText('⚽ 点球大战',W/2,H*0.25);
+    ctx.shadowBlur=0;
+
+    ctx.font=(titleSz*0.4)+'px sans-serif';
+    ctx.fillStyle='#fff';
+    ctx.fillText('FC Barcelona Penalty Challenge',W/2,H*0.33);
+
+    const instSz=Math.min(W*0.035,18);
+    ctx.font=instSz+'px sans-serif';
+    ctx.fillStyle='rgba(255,255,255,0.8)';
+    const insts=['🎯 瞄准 → 在球门内点击锁定射门位置','💪 蓄力 → 点击锁定力量条','⚽ 射门 → 看球进了没有！'];
+    insts.forEach((t,i)=>ctx.fillText(t,W/2,H*0.48+i*(instSz*2.2)));
+
+    // Button
+    const btnW=200*scale,btnH=55*scale;
+    const btnX=W/2-btnW/2,btnY=H*0.72;
+    ctx.shadowColor='rgba(0,77,152,0.5)';ctx.shadowBlur=20;
+    const grd=ctx.createLinearGradient(0,btnY,0,btnY+btnH);
+    grd.addColorStop(0,'#004D98');grd.addColorStop(1,'#003366');
+    ctx.fillStyle=grd;
+    fillRoundRect(btnX,btnY,btnW,btnH,12*scale);
+    ctx.shadowBlur=0;
+    ctx.strokeStyle=COLORS.gold;ctx.lineWidth=2*scale;
+    strokeRoundRect(btnX,btnY,btnW,btnH,12*scale);
+    ctx.fillStyle='#fff';
+    ctx.font='bold '+(20*scale)+'px sans-serif';
+    ctx.fillText('⚽ 开始比赛！',W/2,btnY+btnH/2);
+  }
+}
+
+function loop(time){
+  try {
+    const dt=lastTime?Math.min((time-lastTime)/1000,0.05):0.016;
+    lastTime=time;
+    update(dt);
+    draw();
+  } catch(e) {
+    console.error('Game error:', e);
+    // Try to keep rendering
+  }
+  requestAnimationFrame(loop);
+}
+
+// -----------------------------------------------------------
+//  INPUT
+// -----------------------------------------------------------
+
+function getCanvasPos(e){
+  const rect=canvas.getBoundingClientRect();
+  const cx=e.clientX||(e.touches&&e.touches[0].clientX);
+  const cy=e.clientY||(e.touches&&e.touches[0].clientY);
+  return {x:(cx-rect.left)*(canvas.width/rect.width),y:(cy-rect.top)*(canvas.height/rect.height)};
+}
+
+canvas.addEventListener('mousemove',e=>{
+  pointerInside=true;
+  const p=getCanvasPos(e);mouseX=p.x;mouseY=p.y;
+});
+canvas.addEventListener('mouseenter',()=>pointerInside=true);
+canvas.addEventListener('mouseleave',()=>pointerInside=false);
+canvas.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  const p=getCanvasPos(e);mouseX=p.x;mouseY=p.y;
+},{passive:false});
+canvas.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  const p=getCanvasPos(e);mouseX=p.x;mouseY=p.y;
+  handleClick(p.x,p.y);
+},{passive:false});
+canvas.addEventListener('click',e=>{
+  const p=getCanvasPos(e);
+  handleClick(p.x,p.y);
+});
+
+function handleClick(x,y){
+  const g=goalRect;
+  switch(state){
+    case State.START:{
+      const btnW=200*scale,btnH=55*scale;
+      const btnX=W/2-btnW/2,btnY=H*0.72;
+      if(x>=btnX&&x<=btnX+btnW&&y>=btnY&&y<=btnY+btnH) startGame();
+      break;
+    }
+    case State.AIM:
+      if(x>=g.x&&x<=g.x+g.w&&y>=g.y&&y<=g.y+g.h) lockAim(x,y);
+      break;
+    case State.POWER:
+      if(powerAnimating) lockPower();
+      break;
+    case State.RESULT:
+      round>=MAX_ROUNDS?startGame():nextRound();
+      break;
+    case State.GAMEOVER:
+      startGame();
+      break;
+  }
+}
+
+// --- Go! ---
+state=State.START;
+resize();
+calcGeometry();
+lastTime=0;
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
